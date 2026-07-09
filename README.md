@@ -16,6 +16,26 @@ Fast, lightweight and easy to use Minecraft launcher. Natively available for Win
 * Doesn't require Minecraft account
 * Doesn't require Java to work
 * Can work fully offline
+* Optional Microsoft account login for the official online mode
+
+---
+
+## Microsoft account (official online mode)
+
+The launcher works without an account by default. To play on online-mode
+servers, enable "Use Microsoft account (official)" in Settings and log in
+with a Microsoft account that owns Minecraft: Java Edition. The login uses
+the device code flow: the launcher shows a short code and a microsoft.com
+link where the code must be entered.
+
+This feature requires an Azure application client ID that Mojang has
+approved for the Minecraft services API. If the built-in ID is empty or
+rejected, a custom one can be set with the `MsaClientId` key in
+`vortex_launcher.conf`.
+
+Note: the Microsoft refresh token is stored in plain text in
+`vortex_launcher.conf`. Log out (Settings) before sharing that file or the
+launcher directory.
 
 ---
 

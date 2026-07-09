@@ -27,6 +27,8 @@ Define.s uuid, jvmArguments, logConfId, logConfUrl, logConfArgument
 
 Define.i downloadThread, downloadMissingLibraries, jsonArgumentsMember, jsonArgumentsModernMember, jsonInheritsFromMember
 Define.i downloadMissingLibrariesGadget, downloadThreadsGadget, asyncDownloadGadget, saveSettingsButton, useCustomJavaGadget, useCustomParamsGadget, keepLauncherOpenGadget
+Define.i useMicrosoftAccountGadget, msaLoginButton, msaLogoutButton, msaStatusGadget, msaLaunchOk
+Define.s authAccessToken, authSession, authUserType, authXuid, authClientId
 Define.i i
 
 Define.s playerNameDefault = "Name", ramAmountDefault = "700", javaBinaryPathDefault = "/usr/bin/java"
@@ -41,6 +43,7 @@ Define.i saveLaunchStringDefault = 0
 Define.i useCustomJavaDefault = 0
 Define.i useCustomParamsDefault = 0
 Define.i keepLauncherOpenDefault = 0
+Define.i useMicrosoftAccountDefault = 0
 
 Define.s launcherVersion = "1.1.19"
 Define.s launcherDeveloper = "Kron4ek"
@@ -56,6 +59,8 @@ Declare.s parseVersionsManifest(versionType.i = 0, getClientJarUrl.i = 0, client
 Declare.s parseLibraries(clientVersion.s, prepareForDownload.i = 0)
 Declare.s fileRead(pathToFile.s)
 Declare.s removeSpacesFromVersionName(clientVersion.s)
+
+XIncludeFile "vlauncher_auth.pbi"
 
 If Not FileSize(workingDirectory) = -2
   CreateDirectory(workingDirectory)
@@ -298,6 +303,29 @@ If OpenWindow(0, #PB_Ignore, #PB_Ignore, windowWidth, windowHeight, "Vortex Mine
                   uuid = StringFingerprint("OfflinePlayer:" + playerName, #PB_Cipher_MD5)
                   uuid = Left(uuid, 12) + LCase(Hex(Val("$" + Mid(uuid, 13, 2)) & $0f | $30)) + Mid(uuid, 15, 2) + LCase(Hex(Val("$" + Mid(uuid, 17, 2)) & $3f | $80)) + Right(uuid, 14)
 
+                  authAccessToken = "00000000000000000000000000000000"
+                  authSession = "00000000000000000000000000000000"
+                  authUserType = "mojang"
+                  authXuid = "0000"
+                  authClientId = "0000"
+                  msaLaunchOk = 1
+
+                  If ReadPreferenceInteger("UseMicrosoftAccount", useMicrosoftAccountDefault)
+                    If msaEnsureLogin()
+                      playerName = msaPlayerName
+                      uuid = msaUuid
+                      authAccessToken = msaAccessToken
+                      authSession = "token:" + msaAccessToken + ":" + msaUuid
+                      authUserType = "msa"
+                      authXuid = msaXuid
+                      authClientId = msaClientId()
+                    Else
+                      msaLaunchOk = 0
+
+                      MessageRequester("Error", "Microsoft account login failed!" + #CRLF$ + #CRLF$ + msaLastError)
+                    EndIf
+                  EndIf
+
                   If assetsIndex = "pre-1.6" Or assetsIndex = "legacy"
                     assetsToResources(assetsIndex)
                   EndIf
@@ -327,14 +355,14 @@ If OpenWindow(0, #PB_Ignore, #PB_Ignore, windowWidth, windowHeight, "Vortex Mine
                   fullLaunchString = ReplaceString(fullLaunchString, "${game_directory}", Chr(34) + workingDirectory + Chr(34))
                   fullLaunchString = ReplaceString(fullLaunchString, "${assets_root}", "assets")
                   fullLaunchString = ReplaceString(fullLaunchString, "${auth_uuid}", uuid)
-                  fullLaunchString = ReplaceString(fullLaunchString, "${auth_access_token}", "00000000000000000000000000000000")
-                  fullLaunchString = ReplaceString(fullLaunchString, "${clientid}", "0000")
-                  fullLaunchString = ReplaceString(fullLaunchString, "${auth_xuid}", "0000")
+                  fullLaunchString = ReplaceString(fullLaunchString, "${auth_access_token}", authAccessToken)
+                  fullLaunchString = ReplaceString(fullLaunchString, "${clientid}", authClientId)
+                  fullLaunchString = ReplaceString(fullLaunchString, "${auth_xuid}", authXuid)
                   fullLaunchString = ReplaceString(fullLaunchString, "${user_properties}", "{}")
-                  fullLaunchString = ReplaceString(fullLaunchString, "${user_type}", "mojang")
+                  fullLaunchString = ReplaceString(fullLaunchString, "${user_type}", authUserType)
                   fullLaunchString = ReplaceString(fullLaunchString, "${version_type}", "release")
                   fullLaunchString = ReplaceString(fullLaunchString, "${assets_index_name}", assetsIndex)
-                  fullLaunchString = ReplaceString(fullLaunchString, "${auth_session}", "00000000000000000000000000000000")
+                  fullLaunchString = ReplaceString(fullLaunchString, "${auth_session}", authSession)
                   fullLaunchString = ReplaceString(fullLaunchString, "${game_assets}", "resources")
                   fullLaunchString = ReplaceString(fullLaunchString, "${classpath}", librariesString + clientJarFile)
                   fullLaunchString = ReplaceString(fullLaunchString, "${library_directory}", "libraries")
@@ -343,20 +371,22 @@ If OpenWindow(0, #PB_Ignore, #PB_Ignore, windowWidth, windowHeight, "Vortex Mine
                   fullLaunchString = ReplaceString(fullLaunchString, Chr(34) + "-Dminecraft.launcher.brand=${launcher_name}" + Chr(34), "")
                   fullLaunchString = ReplaceString(fullLaunchString, Chr(34) + "-Dminecraft.launcher.version=${launcher_version}" + Chr(34), "")
 
-                  RunProgram(javaBinaryPath, fullLaunchString, workingDirectory)
+                  If msaLaunchOk
+                    RunProgram(javaBinaryPath, fullLaunchString, workingDirectory)
 
-                  saveLaunchString = ReadPreferenceInteger("SaveLaunchString", saveLaunchStringDefault)
-                  If saveLaunchString
-                    DeleteFile("launch_string.txt")
+                    saveLaunchString = ReadPreferenceInteger("SaveLaunchString", saveLaunchStringDefault)
+                    If saveLaunchString
+                      DeleteFile("launch_string.txt")
 
-                    launchStringFile = OpenFile(#PB_Any, "launch_string.txt")
-                    fullLaunchString = ReplaceString(fullLaunchString, "  ", " ")
-                    WriteString(launchStringFile, Chr(34) + javaBinaryPath + Chr(34) + " " + fullLaunchString)
-                    CloseFile(launchStringFile)
-                  EndIf
+                      launchStringFile = OpenFile(#PB_Any, "launch_string.txt")
+                      fullLaunchString = ReplaceString(fullLaunchString, "  ", " ")
+                      WriteString(launchStringFile, Chr(34) + javaBinaryPath + Chr(34) + " " + fullLaunchString)
+                      CloseFile(launchStringFile)
+                    EndIf
 
-                  If Not ReadPreferenceInteger("KeepLauncherOpen", keepLauncherOpenDefault)
-                    Break
+                    If Not ReadPreferenceInteger("KeepLauncherOpen", keepLauncherOpenDefault)
+                      Break
+                    EndIf
                   EndIf
                 Else
                   MessageRequester("Error", "Client jar file is missing!")
@@ -488,7 +518,7 @@ If OpenWindow(0, #PB_Ignore, #PB_Ignore, windowWidth, windowHeight, "Vortex Mine
         Case settingsButton
           DisableGadget(settingsButton, 1)
 
-          If OpenWindow(3, #PB_Ignore, #PB_Ignore, 350, 315, "Vortex Launcher Settings")
+          If OpenWindow(3, #PB_Ignore, #PB_Ignore, 350, 365, "Vortex Launcher Settings")
               argsTextGadget = TextGadget(#PB_Any, 5, 5, 80, 30, "Launch parameters:")
               argsGadget = StringGadget(#PB_Any, 85, 5, 260, 30, ReadPreferenceString("LaunchArguments", customLaunchArgumentsDefault))
               GadgetToolTip(argsGadget, "These parameters will be used to launch Minecraft")
@@ -528,7 +558,15 @@ If OpenWindow(0, #PB_Ignore, #PB_Ignore, windowWidth, windowHeight, "Vortex Mine
               GadgetToolTip(keepLauncherOpenGadget, "Keep the launcher open after launching the game")
               SetGadgetState(keepLauncherOpenGadget, ReadPreferenceInteger("KeepLauncherOpen", keepLauncherOpenDefault))
 
-              saveSettingsButton = ButtonGadget(#PB_Any, 5, 275, 340, 20, "Save and apply")
+              useMicrosoftAccountGadget = CheckBoxGadget(#PB_Any, 5, 275, 340, 20, "Use Microsoft account (official)")
+              GadgetToolTip(useMicrosoftAccountGadget, "Log in with a Microsoft account that owns the game to play in online mode")
+              SetGadgetState(useMicrosoftAccountGadget, ReadPreferenceInteger("UseMicrosoftAccount", useMicrosoftAccountDefault))
+
+              msaStatusGadget = TextGadget(#PB_Any, 5, 303, 150, 20, msaStatusText())
+              msaLoginButton = ButtonGadget(#PB_Any, 160, 300, 90, 25, "Log in")
+              msaLogoutButton = ButtonGadget(#PB_Any, 255, 300, 90, 25, "Log out")
+
+              saveSettingsButton = ButtonGadget(#PB_Any, 5, 335, 340, 20, "Save and apply")
 
               DisableGadget(downloadThreadsGadget, Bool(Not GetGadgetState(asyncDownloadGadget)))
               DisableGadget(javaPathGadget, Bool(Not GetGadgetState(useCustomJavaGadget)))
@@ -544,6 +582,16 @@ If OpenWindow(0, #PB_Ignore, #PB_Ignore, windowWidth, windowHeight, "Vortex Mine
           DisableGadget(downloadThreadsGadget, Bool(Not GetGadgetState(asyncDownloadGadget)))
         Case useCustomJavaGadget
           DisableGadget(javaPathGadget, Bool(Not GetGadgetState(useCustomJavaGadget)))
+        Case msaLoginButton
+          If msaLoginInteractive()
+            MessageRequester("Microsoft Login", "Logged in as " + msaPlayerName)
+          EndIf
+
+          If IsGadget(msaStatusGadget) : SetGadgetText(msaStatusGadget, msaStatusText()) : EndIf
+        Case msaLogoutButton
+          msaLogout()
+
+          If IsGadget(msaStatusGadget) : SetGadgetText(msaStatusGadget, msaStatusText()) : EndIf
         Case saveSettingsButton
           If GetGadgetText(downloadThreadsGadget) = "0" : SetGadgetText(downloadThreadsGadget, "5") : EndIf
 
@@ -553,6 +601,7 @@ If OpenWindow(0, #PB_Ignore, #PB_Ignore, windowWidth, windowHeight, "Vortex Mine
           WritePreferenceInteger("UseCustomJava", GetGadgetState(useCustomJavaGadget))
           WritePreferenceInteger("UseCustomParameters", GetGadgetState(useCustomParamsGadget))
           WritePreferenceInteger("KeepLauncherOpen", GetGadgetState(keepLauncherOpenGadget))
+          WritePreferenceInteger("UseMicrosoftAccount", GetGadgetState(useMicrosoftAccountGadget))
 
           If GetGadgetState(useCustomJavaGadget)
             WritePreferenceString("JavaPath", GetGadgetText(javaPathGadget))
