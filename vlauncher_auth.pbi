@@ -10,6 +10,8 @@
 ; The ID can be overridden with the MsaClientId key in vortex_launcher.conf.
 
 #MsaClientIdDefault = ""
+#MsaPreferencesFile = "vortex_launcher.conf"
+#MsaTokenExpiryMargin = 300
 #MsaScope = "XboxLive.signin offline_access"
 #MsaDeviceCodeUrl = "https://login.microsoftonline.com/consumers/oauth2/v2.0/devicecode"
 #MsaTokenUrl = "https://login.microsoftonline.com/consumers/oauth2/v2.0/token"
@@ -21,6 +23,7 @@
 Global.s msaPlayerName, msaUuid, msaAccessToken, msaXuid
 Global.s msaLastError
 Global.i msaHttpStatus
+Global.q msaTokenExpiry
 
 Declare.s msaClientId()
 Declare.s msaHttpRequest(verb.i, url.s, body.s = "", contentType.s = "", bearer.s = "")
@@ -28,6 +31,7 @@ Declare.s msaJsonString(jsonString.s, key.s)
 Declare.q msaJsonInteger(jsonString.s, key.s)
 Declare.s msaJwtPayload(jwt.s)
 Declare msaOpenBrowser(url.s)
+Declare msaSavePreferences()
 Declare.i msaXboxChain(msaToken.s)
 Declare.i msaEnsureLogin()
 Declare.i msaLoginInteractive()
@@ -73,7 +77,9 @@ Procedure.s msaJsonString(jsonString.s, key.s)
   json = ParseJSON(#PB_Any, jsonString)
 
   If json
-    member = GetJSONMember(JSONValue(json), key)
+    If JSONType(JSONValue(json)) = #PB_JSON_Object
+      member = GetJSONMember(JSONValue(json), key)
+    EndIf
 
     If member And JSONType(member) = #PB_JSON_String
       value = GetJSONString(member)
@@ -92,7 +98,9 @@ Procedure.q msaJsonInteger(jsonString.s, key.s)
   json = ParseJSON(#PB_Any, jsonString)
 
   If json
-    member = GetJSONMember(JSONValue(json), key)
+    If JSONType(JSONValue(json)) = #PB_JSON_Object
+      member = GetJSONMember(JSONValue(json), key)
+    EndIf
 
     If member And JSONType(member) = #PB_JSON_Number
       value = GetJSONInteger(member)
@@ -140,10 +148,17 @@ Procedure msaOpenBrowser(url.s)
   CompilerEndSelect
 EndProcedure
 
+; PureBasic only writes preferences to disk in ClosePreferences(), so flush
+; explicitly after changing the stored login instead of waiting for exit.
+Procedure msaSavePreferences()
+  ClosePreferences()
+  OpenPreferences(#MsaPreferencesFile)
+EndProcedure
+
 Procedure.i msaXboxChain(msaToken.s)
-  Protected.i requestJson, root, properties, userTokens, json, member, claims, xui
+  Protected.i requestJson, root, properties, userTokens, json, member, claims, xui, element
   Protected.s requestBody, response, xblToken, userHash, xstsToken, jwtPayload
-  Protected.q xErr
+  Protected.q xErr, expiresIn
 
   ; Xbox Live authentication
   requestJson = CreateJSON(#PB_Any)
@@ -163,22 +178,29 @@ Procedure.i msaXboxChain(msaToken.s)
 
   If json
     root = JSONValue(json)
-    member = GetJSONMember(root, "Token")
 
-    If member
-      xblToken = GetJSONString(member)
-    EndIf
+    If JSONType(root) = #PB_JSON_Object
+      member = GetJSONMember(root, "Token")
 
-    claims = GetJSONMember(root, "DisplayClaims")
+      If member And JSONType(member) = #PB_JSON_String
+        xblToken = GetJSONString(member)
+      EndIf
 
-    If claims
-      xui = GetJSONMember(claims, "xui")
+      claims = GetJSONMember(root, "DisplayClaims")
 
-      If xui And JSONArraySize(xui) > 0
-        member = GetJSONMember(GetJSONElement(xui, 0), "uhs")
+      If claims And JSONType(claims) = #PB_JSON_Object
+        xui = GetJSONMember(claims, "xui")
 
-        If member
-          userHash = GetJSONString(member)
+        If xui And JSONType(xui) = #PB_JSON_Array And JSONArraySize(xui) > 0
+          element = GetJSONElement(xui, 0)
+
+          If JSONType(element) = #PB_JSON_Object
+            member = GetJSONMember(element, "uhs")
+
+            If member And JSONType(member) = #PB_JSON_String
+              userHash = GetJSONString(member)
+            EndIf
+          EndIf
         EndIf
       EndIf
     EndIf
@@ -235,6 +257,16 @@ Procedure.i msaXboxChain(msaToken.s)
     ProcedureReturn 0
   EndIf
 
+  ; Remember when the Minecraft token expires so a launcher that stays open
+  ; refreshes it instead of starting the game with a stale token
+  expiresIn = msaJsonInteger(response, "expires_in")
+
+  If expiresIn < 1
+    expiresIn = 86400
+  EndIf
+
+  msaTokenExpiry = Date() + expiresIn - #MsaTokenExpiryMargin
+
   ; auth_xuid is stored in the payload of the Minecraft access token
   jwtPayload = msaJwtPayload(msaAccessToken)
   msaXuid = msaJsonString(jwtPayload, "xuid")
@@ -270,9 +302,11 @@ Procedure.i msaEnsureLogin()
 
   msaLastError = ""
 
-  If msaAccessToken <> ""
+  If msaAccessToken <> "" And Date() < msaTokenExpiry
     ProcedureReturn 1
   EndIf
+
+  msaAccessToken = ""
 
   If clientId = ""
     msaLastError = "No Azure client ID is configured (MsaClientId in vortex_launcher.conf)."
@@ -284,7 +318,7 @@ Procedure.i msaEnsureLogin()
     ProcedureReturn 0
   EndIf
 
-  response = msaHttpRequest(#PB_HTTP_Post, #MsaTokenUrl, "grant_type=refresh_token&client_id=" + clientId + "&refresh_token=" + refreshToken + "&scope=" + URLEncoder(#MsaScope), "application/x-www-form-urlencoded")
+  response = msaHttpRequest(#PB_HTTP_Post, #MsaTokenUrl, "grant_type=refresh_token&client_id=" + URLEncoder(clientId) + "&refresh_token=" + URLEncoder(refreshToken) + "&scope=" + URLEncoder(#MsaScope), "application/x-www-form-urlencoded")
   accessToken = msaJsonString(response, "access_token")
 
   If accessToken = ""
@@ -296,6 +330,7 @@ Procedure.i msaEnsureLogin()
 
   If newRefreshToken <> ""
     WritePreferenceString("MsaRefreshToken", newRefreshToken)
+    msaSavePreferences()
   EndIf
 
   ProcedureReturn msaXboxChain(accessToken)
@@ -303,7 +338,7 @@ EndProcedure
 
 Procedure.i msaLoginInteractive()
   Protected.s clientId = msaClientId()
-  Protected.s response, deviceCode, userCode, verificationUri, oauthError, accessToken
+  Protected.s response, deviceCode, userCode, verificationUri, oauthError, accessToken, refreshToken
   Protected.i loginWindow, codeGadget, openBrowserButton, cancelButton
   Protected.i event, interval, expiresIn, startTime, lastPoll, done, success
 
@@ -314,7 +349,7 @@ Procedure.i msaLoginInteractive()
     ProcedureReturn 0
   EndIf
 
-  response = msaHttpRequest(#PB_HTTP_Post, #MsaDeviceCodeUrl, "client_id=" + clientId + "&scope=" + URLEncoder(#MsaScope), "application/x-www-form-urlencoded")
+  response = msaHttpRequest(#PB_HTTP_Post, #MsaDeviceCodeUrl, "client_id=" + URLEncoder(clientId) + "&scope=" + URLEncoder(#MsaScope), "application/x-www-form-urlencoded")
 
   deviceCode = msaJsonString(response, "device_code")
   userCode = msaJsonString(response, "user_code")
@@ -368,13 +403,13 @@ Procedure.i msaLoginInteractive()
       If Not done And ElapsedMilliseconds() - lastPoll >= interval * 1000
         lastPoll = ElapsedMilliseconds()
 
-        response = msaHttpRequest(#PB_HTTP_Post, #MsaTokenUrl, "grant_type=urn:ietf:params:oauth:grant-type:device_code&client_id=" + clientId + "&device_code=" + deviceCode, "application/x-www-form-urlencoded")
+        response = msaHttpRequest(#PB_HTTP_Post, #MsaTokenUrl, "grant_type=urn:ietf:params:oauth:grant-type:device_code&client_id=" + URLEncoder(clientId) + "&device_code=" + URLEncoder(deviceCode), "application/x-www-form-urlencoded")
 
         accessToken = msaJsonString(response, "access_token")
         oauthError = msaJsonString(response, "error")
 
         If accessToken <> ""
-          WritePreferenceString("MsaRefreshToken", msaJsonString(response, "refresh_token"))
+          refreshToken = msaJsonString(response, "refresh_token")
           success = msaXboxChain(accessToken)
           done = 1
         ElseIf oauthError = "slow_down"
@@ -394,8 +429,12 @@ Procedure.i msaLoginInteractive()
     CloseWindow(loginWindow)
   EndIf
 
+  ; Only store the session once the whole chain succeeded, otherwise the
+  ; launcher would report a login that cannot start the game
   If success
+    WritePreferenceString("MsaRefreshToken", refreshToken)
     WritePreferenceString("MsaPlayerName", msaPlayerName)
+    msaSavePreferences()
   ElseIf msaLastError <> ""
     MessageRequester("Error", "Microsoft login failed!" + #CRLF$ + #CRLF$ + msaLastError)
   EndIf
@@ -406,8 +445,10 @@ EndProcedure
 Procedure msaLogout()
   RemovePreferenceKey("MsaRefreshToken")
   RemovePreferenceKey("MsaPlayerName")
+  msaSavePreferences()
 
   msaAccessToken = ""
+  msaTokenExpiry = 0
   msaPlayerName = ""
   msaUuid = ""
   msaXuid = ""

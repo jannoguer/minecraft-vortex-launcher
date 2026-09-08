@@ -27,7 +27,7 @@ Define.s uuid, jvmArguments, logConfId, logConfUrl, logConfArgument
 
 Define.i downloadThread, downloadMissingLibraries, jsonArgumentsMember, jsonArgumentsModernMember, jsonInheritsFromMember
 Define.i downloadMissingLibrariesGadget, downloadThreadsGadget, asyncDownloadGadget, saveSettingsButton, useCustomJavaGadget, useCustomParamsGadget, keepLauncherOpenGadget
-Define.i useMicrosoftAccountGadget, msaLoginButton, msaLogoutButton, msaStatusGadget, msaLaunchOk
+Define.i useMicrosoftAccountGadget, msaLoginButton, msaLogoutButton, msaStatusGadget, msaLaunchOk, msaLoginOk
 Define.s authAccessToken, authSession, authUserType, authXuid, authClientId
 Define.i i
 
@@ -570,7 +570,16 @@ If OpenWindow(0, #PB_Ignore, #PB_Ignore, windowWidth, windowHeight, "Vortex Mine
         Case useCustomJavaGadget
           DisableGadget(javaPathGadget, Bool(Not GetGadgetState(useCustomJavaGadget)))
         Case msaLoginButton
-          If msaLoginInteractive()
+          ; The login runs its own event loop, so block the other windows meanwhile
+          DisableWindow(0, 1)
+          DisableWindow(3, 1)
+
+          msaLoginOk = msaLoginInteractive()
+
+          DisableWindow(3, 0)
+          DisableWindow(0, 0)
+
+          If msaLoginOk
             MessageRequester("Microsoft Login", "Logged in as " + msaPlayerName)
           EndIf
 
